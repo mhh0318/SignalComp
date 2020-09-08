@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """An Implement of an autoencoder with pytorch.
-This is the official template code for 2020 NIAC https://naic.pcl.ac.cn/.
+This is the template code for 2020 NIAC https://naic.pcl.ac.cn/.
 The code is based on the sample code with tensorflow for 2020 NIAC and it can only run with GPUS.
 If you have any questions, please contact me with https://github.com/xufana7/AutoEncoder-with-pytorch
 Author, Fan xu Aug 2020
 """
 import numpy as np
-import math
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+from collections import OrderedDict
 
-
-# This part implement the quantization and dequantization operations.
-# The output of the encoder must be the bitstream.
 def Num2Bit(Num, B):
     Num_ = Num.type(torch.uint8)
 
@@ -72,9 +69,11 @@ class Dequantization(torch.autograd.Function):
         # return as many input gradients as there were arguments.
         # Gradients of non-Tensor arguments to forward must be None.
         # repeat the gradient of a Num for four time.
-        b, c = grad_output.shape
-        grad_bit = grad_output.repeat(1, 1, 4)
-        return torch.reshape(grad_bit, (-1, c * ctx.constant)), None
+        # b, c = grad_output.shape
+        # grad_bit = grad_output.repeat(1, 1, ctx.constant)
+        # return torch.reshape(grad_bit, (-1, c * ctx.constant)), None
+        grad_bit = grad_output.repeat_interleave(ctx.constant, dim=1)
+        return grad_bit, None
 
 
 class QuantizationLayer(nn.Module):
@@ -105,71 +104,118 @@ def conv3x3(in_planes, out_planes, stride=1):
                      padding=1, bias=True)
 
 
+class ConvBN(nn.Sequential):
+    def __init__(self, in_planes, out_planes, kernel_size, stride=1, groups=1):
+        if not isinstance(kernel_size, int):
+            padding = [(i - 1) // 2 for i in kernel_size]
+        else:
+            padding = (kernel_size - 1) // 2
+        super(ConvBN, self).__init__(OrderedDict([
+            ('conv', nn.Conv2d(in_planes, out_planes, kernel_size, stride,
+                               padding=padding, groups=groups, bias=False)),
+            ('bn', nn.BatchNorm2d(out_planes))
+        ]))
+
+
+class CRBlock(nn.Module):
+    def __init__(self):
+        super(CRBlock, self).__init__()
+        self.path1 = nn.Sequential(OrderedDict([
+            ('conv3x3', ConvBN(32, 32, 3)),
+            ('relu1', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ('conv1x9', ConvBN(32, 32, [1, 9])),
+            ('relu2', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ('conv9x1', ConvBN(32, 32, [9, 1])),
+        ]))
+        self.path2 = nn.Sequential(OrderedDict([
+            ('conv1x5', ConvBN(32, 32, [1, 5])),
+            ('relu', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ('conv5x1', ConvBN(32, 32, [5, 1])),
+        ]))
+        self.conv1x1 = ConvBN(32 * 2, 32, 1)
+        self.identity = nn.Identity()
+        self.relu = nn.LeakyReLU(negative_slope=0.3, inplace=True)
+
+    def forward(self, x):
+        identity = self.identity(x)
+
+        out1 = self.path1(x)
+        out2 = self.path2(x)
+        out = torch.cat((out1, out2), dim=1)
+        out = self.relu(out)
+        out = self.conv1x1(out)
+
+        out = self.relu(out + identity)
+        return out
+
+
 class Encoder(nn.Module):
     B = 4
 
-    def __init__(self, feedback_bits):
+    def __init__(self, feedback_bits, quantization=True):
         super(Encoder, self).__init__()
-        self.conv1 = conv3x3(2, 2)
-        #self.bn1 = nn.BatchNorm2d(2)
-        self.conv2 = conv3x3(2, 2)
-        #self.bn2 = nn.BatchNorm2d(2)
+        self.encoder1 = nn.Sequential(OrderedDict([
+            ("conv3x3_bn", ConvBN(2, 32, 3)),
+            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("conv1x9_bn", ConvBN(32, 32, [1, 9])),
+            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("conv9x1_bn", ConvBN(32, 32, [9, 1])),
+        ]))
+        self.encoder2 = ConvBN(2, 32, 3)
+        self.encoder_conv = nn.Sequential(OrderedDict([
+            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("conv1x1_bn", ConvBN(32 * 2, 2, 1)),
+            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+        ]))
+
         self.fc = nn.Linear(1024, int(feedback_bits / self.B))
         self.sig = nn.Sigmoid()
         self.quantize = QuantizationLayer(self.B)
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+        self.quantization = quantization
 
     def forward(self, x):
-        out = F.relu(self.conv1(x))
-        out = F.relu(self.conv2(out))
-        #out = F.relu(self.bn1(self.conv1(x)))
-        #out = F.relu(self.bn2(self.conv2(out)))
+        encode1 = self.encoder1(x)
+        encode2 = self.encoder2(x)
+        out = torch.cat((encode1, encode2), dim=1)
+        out = self.encoder_conv(out)
         out = out.view(-1, 1024)
         out = self.fc(out)
         out = self.sig(out)
-        out = self.quantize(out)
-
+        if self.quantization:
+            out = self.quantize(out)
+        else:
+            out = out
         return out
 
 
 class Decoder(nn.Module):
     B = 4
 
-    def __init__(self, feedback_bits):
+    def __init__(self, feedback_bits, quantization=True):
         super(Decoder, self).__init__()
         self.feedback_bits = feedback_bits
         self.dequantize = DequantizationLayer(self.B)
-        self.multiConvs = nn.ModuleList()
         self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
-        self.out_cov = conv3x3(2, 2)
+        decoder = OrderedDict([
+            ("conv5x5_bn", ConvBN(2, 32, 5)),
+            ("relu", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("CRBlock1", CRBlock()),
+            ("CRBlock2", CRBlock()),
+        ])
+        self.decoder_feature = nn.Sequential(decoder)
+        self.out_cov = conv3x3(32, 2)
         self.sig = nn.Sigmoid()
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
-
-        for _ in range(3):
-            self.multiConvs.append(nn.Sequential(
-                conv3x3(2, 8),
-                nn.ReLU(),
-                conv3x3(8, 16),
-                nn.ReLU(),
-                conv3x3(16, 2),
-                nn.ReLU()))
+        self.quantization = quantization
 
     def forward(self, x):
-        out = self.dequantize(x)
+        if self.quantization:
+            out = self.dequantize(x)
+        else:
+            out = x
         out = out.view(-1, int(self.feedback_bits / self.B))
-        out = self.sig(self.fc(out))
+        out = self.fc(out)
         out = out.view(-1, 2, 16, 32)
-        for i in range(3):
-            residual = out
-            out = self.multiConvs[i](out)
-            out = residual + out
-
+        out = self.decoder_feature(out)
         out = self.out_cov(out)
         out = self.sig(out)
         return out
@@ -200,8 +246,9 @@ def NMSE(x, x_hat):
     power = np.sum(abs(x_C) ** 2, axis=1)
     mse = np.sum(abs(x_C - x_hat_C) ** 2, axis=1)
     nmse = np.mean(mse / power)
-    #nmse = 10 * math.log10(np.mean(mse / power))
     return nmse
+
+
 
 
 def Score(NMSE):
@@ -215,8 +262,8 @@ class DatasetFolder(Dataset):
     def __init__(self, matData):
         self.matdata = matData
 
-    def __getitem__(self, index):
-        return self.matdata[index]
-
     def __len__(self):
         return self.matdata.shape[0]
+
+    def __getitem__(self, index):
+        return self.matdata[index]  # , self.matdata[index]

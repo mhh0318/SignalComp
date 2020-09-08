@@ -15,19 +15,18 @@ img_width = 32
 img_channels = 2
 feedback_bits = 128
 # Data loading
-data_load_address = './data'
-mat = h5py.File(data_load_address+'/H_test.mat', 'r')
-data = np.transpose(mat['H_test'])
+mat = h5py.File('../data/Hdata.mat','r')
+data = np.transpose(mat['H_train'] )
 data = data.astype('float32')
 x_test = np.reshape(data, [len(data), img_channels, img_height, img_width])
 
 # load encoder_output
-decode_input = np.load('./Modelsave/encoder_output.npy')
+decode_input = np.load('../Modelsave/encoder_output.npy')
 
 # load model and test NMSE
 model = AutoEncoder(feedback_bits).cuda()
 model_decoder = model.decoder
-model_path = './Modelsave/decoder.pth.tar'
+model_path = '../Modelsave/decoder.pth.tar'
 model_decoder.load_state_dict(torch.load(model_path)['state_dict'])
 print("weight loaded")
 

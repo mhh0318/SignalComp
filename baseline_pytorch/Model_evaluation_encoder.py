@@ -18,15 +18,15 @@ feedback_bits = 128
 model_ID = 'CsiNet'  # Model Number
 
 # load test data
-mat = h5py.File('./data/H_test.mat')
-data = np.transpose(mat['H_test'] )
+mat = h5py.File('../data/Hdata.mat','r')
+data = np.transpose(mat['H_train'] )
 data = data.astype('float32')
 data = np.reshape(data, [len(data), img_channels, img_height, img_width])
 
 # load model
 model = AutoEncoder(feedback_bits).cuda()
 model_encoder = model.encoder
-model_path = './Modelsave/encoder.pth.tar'
+model_path = '../Modelsave/encoder.pth.tar'
 model_encoder.load_state_dict(torch.load(model_path)['state_dict'])
 print("weight loaded")
 
@@ -49,4 +49,4 @@ with torch.no_grad():
         else:
             encode_feature = np.concatenate((encode_feature, output), axis=0)
 print("feedbackbits length is ", np.shape(encode_feature)[-1])
-np.save('./Modelsave/encoder_output.npy', encode_feature)
+np.save('../Modelsave/encoder_output.npy', encode_feature)
