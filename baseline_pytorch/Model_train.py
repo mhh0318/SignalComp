@@ -33,8 +33,8 @@ def seed_everything(seed=42):
 SEED = 1
 seed_everything(SEED)
 
-batch_size = 256
-epochs = 100
+batch_size = 512
+epochs = 1000
 learning_rate = 2e-3  # bigger to train faster
 num_workers = 4
 print_freq = 500
