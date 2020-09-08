@@ -28,7 +28,7 @@ print("weight loaded")
 # load test data
 mat = h5py.File('../data/Hdata.mat','r')
 data = np.transpose(mat['H_train'])
-data = data.astype('float32')
+data = data[-200:,:].astype('float32')
 data = np.reshape(data, [len(data), img_channels, img_height, img_width])
 
 

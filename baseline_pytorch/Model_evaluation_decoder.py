@@ -17,7 +17,7 @@ feedback_bits = 128
 # Data loading
 mat = h5py.File('../data/Hdata.mat','r')
 data = np.transpose(mat['H_train'] )
-data = data.astype('float32')
+data = data[-200:,:].astype('float32')
 x_test = np.reshape(data, [len(data), img_channels, img_height, img_width])
 
 # load encoder_output

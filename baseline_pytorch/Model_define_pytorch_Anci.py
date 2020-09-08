@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""An Implement of an autoencoder with pytorch.
-This is the template code for 2020 NIAC https://naic.pcl.ac.cn/.
-The code is based on the sample code with tensorflow for 2020 NIAC and it can only run with GPUS.
-If you have any questions, please contact me with https://github.com/xufana7/AutoEncoder-with-pytorch
-Author, Fan xu Aug 2020
 
-changed by seefun Aug 2020
-github.com/seefun | kaggle.com/seefun
-"""
 import numpy as np
 import torch.nn as nn
 import torch
@@ -104,11 +96,6 @@ class DequantizationLayer(nn.Module):
         return out
 
 
-def conv3x3(in_planes, out_planes, stride=1):
-    """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=1, bias=True)
-
 
 class ConvBN(nn.Sequential):
     def __init__(self, in_planes, out_planes, kernel_size, stride=1, groups=1):
@@ -152,39 +139,10 @@ class AnciBlock(nn.Module):
         return out
 
 
-class Denoiser(nn.Module):
-    def __init__(self):
-        super(Denoiser, self).__init__()
-        self.encoder = nn.Sequential(OrderedDict([
-            ("conv3x3_bn", ConvBN(2, 64, [7, 7])),
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x9_bn", ConvBN(64, 16, [1, 1])),
-            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-        ]))
-        self.AnciBlock = AnciBlock()
-        self.encoder2 = nn.Sequential(OrderedDict([
-            ("conv3x3_bn", ConvBN(16, 2, [3, 3])),
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-        ]))
-        self.tanh = nn.Tanh()
-
-    def forward(self, x):
-        out = self.encoder(x)
-        out = self.AnciBlock(out)
-        out = self.AnciBlock(out)
-        out = self.AnciBlock(out)
-        out = self.AnciBlock(out)
-        out = self.encoder2(out)
-        out = self.tanh(out)
-        return out
-
-
 class Encoder(nn.Module):
     B = 4
-
     def __init__(self, feedback_bits, quantization=True):
         super(Encoder, self).__init__()
-        self.encoder = Denoiser()
         self.encoder1 = nn.Sequential(OrderedDict([
             ("conv3x3_bn", ConvBN(2, 64, [7, 7])),
             ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
@@ -278,31 +236,6 @@ def NMSE(x, x_hat):
     return nmse
 
 
-def NMSE_cuda(x, x_hat):
-    x_real = x[:, 0, :, :].view(len(x), -1) - 0.5
-    x_imag = x[:, 1, :, :].view(len(x), -1) - 0.5
-    x_hat_real = x_hat[:, 0, :, :].view(len(x_hat), -1) - 0.5
-    x_hat_imag = x_hat[:, 1, :, :].view(len(x_hat), -1) - 0.5
-    power = torch.sum(x_real ** 2 + x_imag ** 2, axis=1)
-    mse = torch.sum((x_real - x_hat_real) ** 2 + (x_imag - x_hat_imag) ** 2, axis=1)
-    nmse = mse / power
-    return nmse
-
-
-class NMSELoss(nn.Module):
-    def __init__(self, reduction='sum'):
-        super(NMSELoss, self).__init__()
-        self.reduction = reduction
-
-    def forward(self, x_hat, x):
-        nmse = NMSE_cuda(x, x_hat)
-        if self.reduction == 'mean':
-            nmse = torch.mean(nmse)
-        else:
-            nmse = torch.sum(nmse)
-        return nmse
-
-
 def Score(NMSE):
     score = 1 - NMSE
     return score
@@ -314,15 +247,8 @@ class DatasetFolder(Dataset):
     def __init__(self, matData):
         self.matdata = matData
 
+    def __getitem__(self, index):
+        return self.matdata[index]
+
     def __len__(self):
         return self.matdata.shape[0]
-
-    def __getitem__(self, index):
-        return self.matdata[index]  # , self.matdata[index]
-
-if __name__ == "__main__":
-    input = torch.randn(100,2,16,32).cuda()
-    net = AutoEncoder(128)
-    net = net.cuda()
-    out = net(input)
-    print('123')
