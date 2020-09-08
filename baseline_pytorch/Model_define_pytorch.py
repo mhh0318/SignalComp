@@ -4,6 +4,9 @@ This is the template code for 2020 NIAC https://naic.pcl.ac.cn/.
 The code is based on the sample code with tensorflow for 2020 NIAC and it can only run with GPUS.
 If you have any questions, please contact me with https://github.com/xufana7/AutoEncoder-with-pytorch
 Author, Fan xu Aug 2020
+
+changed by seefun Aug 2020
+github.com/seefun | kaggle.com/seefun
 """
 import numpy as np
 import torch.nn as nn
@@ -12,6 +15,9 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 from collections import OrderedDict
 
+
+# This part implement the quantization and dequantization operations.
+# The output of the encoder must be the bitstream.
 def Num2Bit(Num, B):
     Num_ = Num.type(torch.uint8)
 
@@ -117,20 +123,20 @@ class ConvBN(nn.Sequential):
         ]))
 
 
-class CRBlock(nn.Module):
+class AnciBlock(nn.Module):
     def __init__(self):
-        super(CRBlock, self).__init__()
-        self.path1 = nn.Sequential(OrderedDict([
-            ('conv3x3', ConvBN(32, 32, 3)),
+        super(AnciBlock, self).__init__()
+        self.main1 = nn.Sequential(OrderedDict([
+            ('conv', ConvBN(16, 16, [7, 7])),
             ('relu1', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv1x9', ConvBN(32, 32, [1, 9])),
-            ('relu2', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv9x1', ConvBN(32, 32, [9, 1])),
+        ]))
+        self.path1 = nn.Sequential(OrderedDict([
+            ('conv3x3', ConvBN(16, 16, [5, 5])),
+            ('relu1', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
         ]))
         self.path2 = nn.Sequential(OrderedDict([
-            ('conv1x5', ConvBN(32, 32, [1, 5])),
+            ('conv1x5', ConvBN(16, 16, [3, 3])),
             ('relu', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv5x1', ConvBN(32, 32, [5, 1])),
         ]))
         self.conv1x1 = ConvBN(32 * 2, 32, 1)
         self.identity = nn.Identity()
@@ -138,14 +144,38 @@ class CRBlock(nn.Module):
 
     def forward(self, x):
         identity = self.identity(x)
-
-        out1 = self.path1(x)
-        out2 = self.path2(x)
-        out = torch.cat((out1, out2), dim=1)
-        out = self.relu(out)
-        out = self.conv1x1(out)
-
+        out = self.main1(x)
+        out1 = self.path1(out)
+        out2 = self.path2(out)
+        out = self.relu(out1 + out2)
         out = self.relu(out + identity)
+        return out
+
+
+class Denoiser(nn.Module):
+    def __init__(self):
+        super(Denoiser, self).__init__()
+        self.encoder = nn.Sequential(OrderedDict([
+            ("conv3x3_bn", ConvBN(2, 64, [7, 7])),
+            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("conv1x9_bn", ConvBN(64, 16, [1, 1])),
+            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+        ]))
+        self.AnciBlock = AnciBlock()
+        self.encoder2 = nn.Sequential(OrderedDict([
+            ("conv3x3_bn", ConvBN(16, 2, [3, 3])),
+            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+        ]))
+        self.tanh = nn.Tanh()
+
+    def forward(self, x):
+        out = self.encoder(x)
+        out = self.AnciBlock(out)
+        out = self.AnciBlock(out)
+        out = self.AnciBlock(out)
+        out = self.AnciBlock(out)
+        out = self.encoder2(out)
+        out = self.tanh(out)
         return out
 
 
@@ -154,30 +184,28 @@ class Encoder(nn.Module):
 
     def __init__(self, feedback_bits, quantization=True):
         super(Encoder, self).__init__()
+        self.encoder = Denoiser()
         self.encoder1 = nn.Sequential(OrderedDict([
-            ("conv3x3_bn", ConvBN(2, 32, 3)),
+            ("conv3x3_bn", ConvBN(2, 64, [7, 7])),
             ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x9_bn", ConvBN(32, 32, [1, 9])),
-            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv9x1_bn", ConvBN(32, 32, [9, 1])),
-        ]))
-        self.encoder2 = ConvBN(2, 32, 3)
-        self.encoder_conv = nn.Sequential(OrderedDict([
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x1_bn", ConvBN(32 * 2, 2, 1)),
+            ("conv1x9_bn", ConvBN(64, 16, [1, 1])),
             ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
         ]))
-
+        self.AnciBlock = AnciBlock()
+        self.encoder2 = nn.Sequential(OrderedDict([
+            ("conv3x3_bn", ConvBN(16, 2, [1, 1])),
+            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+        ]))
         self.fc = nn.Linear(1024, int(feedback_bits / self.B))
         self.sig = nn.Sigmoid()
         self.quantize = QuantizationLayer(self.B)
         self.quantization = quantization
 
     def forward(self, x):
-        encode1 = self.encoder1(x)
-        encode2 = self.encoder2(x)
-        out = torch.cat((encode1, encode2), dim=1)
-        out = self.encoder_conv(out)
+        out1 = self.encoder1(x)
+        out = self.AnciBlock(out1)
+        out = self.encoder2(out)
+#        out = out.view(-1, 2, 16, 32)
         out = out.view(-1, 1024)
         out = self.fc(out)
         out = self.sig(out)
@@ -196,15 +224,13 @@ class Decoder(nn.Module):
         self.feedback_bits = feedback_bits
         self.dequantize = DequantizationLayer(self.B)
         self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
-        decoder = OrderedDict([
-            ("conv5x5_bn", ConvBN(2, 32, 5)),
+        self.decoder1 = nn.Sequential(OrderedDict([
+            ("conv5x5_bn", ConvBN(2, 16, [1, 1])),
             ("relu", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("CRBlock1", CRBlock()),
-            ("CRBlock2", CRBlock()),
-        ])
-        self.decoder_feature = nn.Sequential(decoder)
-        self.out_cov = conv3x3(32, 2)
-        self.sig = nn.Sigmoid()
+        ]))
+        self.AnciBlock = AnciBlock()
+        self.out_cov = ConvBN(16, 2, [3, 3])
+        self.tanh = nn.Tanh()
         self.quantization = quantization
 
     def forward(self, x):
@@ -215,9 +241,12 @@ class Decoder(nn.Module):
         out = out.view(-1, int(self.feedback_bits / self.B))
         out = self.fc(out)
         out = out.view(-1, 2, 16, 32)
-        out = self.decoder_feature(out)
+        out = self.decoder1(out)
+        out = self.AnciBlock(out)
+        out = self.AnciBlock(out)
+        out = self.AnciBlock(out)
         out = self.out_cov(out)
-        out = self.sig(out)
+        out = self.tanh(out)
         return out
 
 
@@ -290,3 +319,10 @@ class DatasetFolder(Dataset):
 
     def __getitem__(self, index):
         return self.matdata[index]  # , self.matdata[index]
+
+if __name__ == "__main__":
+    input = torch.randn(100,2,16,32).cuda()
+    net = AutoEncoder(128)
+    net = net.cuda()
+    out = net(input)
+    print('123')
