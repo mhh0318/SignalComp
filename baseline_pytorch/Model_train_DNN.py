@@ -59,7 +59,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 # Data loading
 data_load_address = '../data'
-mat = h5py.File('./Hdata.mat', 'r')
+mat = h5py.File(data_load_address + '/Hdata.mat', 'r')
 data = np.transpose(mat['H_train'])  # shape=(320000, 1024)
 data = data.astype('float32')
 data = np.reshape(data, [len(data), img_channels, img_height, img_width])
@@ -135,13 +135,13 @@ for epoch in range(epochs):
         if average_loss < best_loss:
             # model save
             # save encoder
-            modelSave1 = './Modelsave/encoder.pth.tar'
+            modelSave1 = '../Modelsave/encoder.pth.tar'
             try:
                 torch.save({'state_dict': model.encoder.state_dict(), }, modelSave1)
             except:
                 torch.save({'state_dict': model.module.encoder.state_dict(), }, modelSave1)
             # save decoder
-            modelSave2 = './Modelsave/decoder.pth.tar'
+            modelSave2 = '../Modelsave/decoder.pth.tar'
             try:
                 torch.save({'state_dict': model.decoder.state_dict(), }, modelSave2)
             except:
