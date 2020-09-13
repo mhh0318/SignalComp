@@ -17,7 +17,7 @@ import random
 from Model_define_pytorch import AutoEncoder, DatasetFolder, NMSE_cuda, NMSELoss
 
 # Parameters for training
-gpu_list = '0'
+gpu_list = '2'
 os.environ["CUDA_VISIBLE_DEVICES"] = gpu_list
 
 
@@ -35,7 +35,7 @@ seed_everything(SEED)
 
 batch_size = 512
 epochs = 1000
-learning_rate = 2e-3  # bigger to train faster
+learning_rate = 1e-3  # bigger to train faster
 num_workers = 4
 print_freq = 500
 train_test_ratio = 0.8
@@ -83,6 +83,7 @@ test_loader = torch.utils.data.DataLoader(
     test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
 best_loss = 100
+print('=======Without Denoiser======')
 for epoch in range(epochs):
     print('========================')
     print('lr:%.4e' % optimizer.param_groups[0]['lr'])
@@ -103,8 +104,8 @@ for epoch in range(epochs):
             model.module.encoder.quantization = True
             model.module.decoder.quantization = True
 
-    if epoch == epochs // 4 * 3:
-        optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.25
+    if epoch == epochs // 4 :
+        optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr'] * 0.5
 
     for i, input in enumerate(train_loader):
 
@@ -139,13 +140,13 @@ for epoch in range(epochs):
         if average_loss < best_loss:
             # model save
             # save encoder
-            modelSave1 = '../Modelsave/encoder.pth.tar'
+            modelSave1 = '../Model_withoutD/encoder.pth.tar'
             try:
                 torch.save({'state_dict': model.encoder.state_dict(), }, modelSave1)
             except:
                 torch.save({'state_dict': model.module.encoder.state_dict(), }, modelSave1)
             # save decoder
-            modelSave2 = '../Modelsave/decoder.pth.tar'
+            modelSave2 = '../Model_withoutD/decoder.pth.tar'
             try:
                 torch.save({'state_dict': model.decoder.state_dict(), }, modelSave2)
             except:
