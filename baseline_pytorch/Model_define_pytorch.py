@@ -121,20 +121,23 @@ class AnciBlock(nn.Module):
     def __init__(self):
         super(AnciBlock, self).__init__()
         self.main1 = nn.Sequential(OrderedDict([
-            ('conv7x7', ConvBN(16, 16, [7, 7])),
-            ('Lrelu', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ('conv7x7', ConvBN(8, 8, [5, 5])),
+            ('Lrelu', nn.SELU(inplace=True)),
+            ('DP', nn.AlphaDropout())
         ]))
         self.path1 = nn.Sequential(OrderedDict([
-            ('conv5x5', ConvBN(16, 16, [5, 5])),
-            ('Lrelu', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ('conv5x5', ConvBN(8, 8, [3, 3])),
+            ('Lrelu', nn.SELU(inplace=True)),
+            ('DP', nn.AlphaDropout())
         ]))
         self.path2 = nn.Sequential(OrderedDict([
-            ('conv3x3', ConvBN(16, 16, [3, 3])),
-            ('Lrelu', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ('conv3x3', ConvBN(8, 8, [3, 3])),
+            ('Lrelu', nn.SELU(inplace=True)),
+            ('DP', nn.AlphaDropout())
         ]))
-        self.conv1x1 = ConvBN(32 * 2, 32, 1)
         self.identity = nn.Identity()
-        self.relu = nn.LeakyReLU(negative_slope=0.3, inplace=True)
+        self.relu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+        self.dp = nn.Dropout2d()
 
     def forward(self, x):
         identity = self.identity(x)
@@ -144,49 +147,23 @@ class AnciBlock(nn.Module):
         out = self.relu(out1 + out2)
         out = self.relu(out + identity)
         return out
-'''
-class Denoiser(nn.Module):
-    def __init__(self):
-        super(Denoiser, self).__init__()
-        self.encoder = nn.Sequential(OrderedDict([
-            ("conv3x3_bn", ConvBN(2, 64, [7, 7])),
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x9_bn", ConvBN(64, 16, [1, 1])),
-            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-        ]))
-        self.AnciBlock = AnciBlock()
-        self.encoder2 = nn.Sequential(OrderedDict([
-            ("conv3x3_bn", ConvBN(16, 2, [3, 3])),
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-        ]))
-        self.tanh = nn.Tanh()
 
-    def forward(self, x):
-        out = self.encoder(x)
-        out = self.AnciBlock(out)
-        out = self.AnciBlock(out)
-        out = self.AnciBlock(out)
-        out = self.AnciBlock(out)
-        out = self.encoder2(out)
-        out = self.tanh(out)
-        return out
-'''
+
 class Encoder(nn.Module):
-    B = 4
+    B = 2
 
     def __init__(self, feedback_bits, quantization=True):
         super(Encoder, self).__init__()
-        #self.encoder = Denoiser()
         self.encoder1 = nn.Sequential(OrderedDict([
-            ("conv7x7_bn", ConvBN(2, 64, [7, 7])),
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x1_bn", ConvBN(64, 16, [1, 1])),
-            ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("conv7x7_bn", ConvBN(2, 8, [3, 3])),
+            ('Lrelu', nn.SELU()),
+            ('DP', nn.AlphaDropout())
         ]))
         self.AnciBlock = AnciBlock()
         self.encoder2 = nn.Sequential(OrderedDict([
-            ("conv1x1_bn", ConvBN(16, 2, [1, 1])),
-            ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("conv1x1_bn", ConvBN(8, 2, [1, 1])),
+            ('Lrelu', nn.SELU()),
+            ('DP', nn.AlphaDropout())
         ]))
         self.fc = nn.Linear(1024, int(feedback_bits / self.B))
         self.sig = nn.Sigmoid()
@@ -194,7 +171,6 @@ class Encoder(nn.Module):
         self.quantization = quantization
 
     def forward(self, x):
-        #out = self.encoder(x)
         out1 = self.encoder1(x)
         out = self.AnciBlock(out1)
         out = self.encoder2(out)
@@ -209,7 +185,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    B = 4
+    B = 2
 
     def __init__(self, feedback_bits, quantization=True):
         super(Decoder, self).__init__()
@@ -217,12 +193,12 @@ class Decoder(nn.Module):
         self.dequantize = DequantizationLayer(self.B)
         self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
         self.decoder1 = nn.Sequential(OrderedDict([
-            ("conv5x5_bn", ConvBN(2, 16, [1, 1])),
-            ("relu", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
+            ("conv5x5_bn", ConvBN(2, 8, [1, 1])),
+            ("relu", nn.LeakyReLU(negative_slope=0.1, inplace=True)),
         ]))
         self.AnciBlock = AnciBlock()
-        self.out_cov = ConvBN(16, 2, [3, 3])
-        self.tanh = nn.Tanh()
+        self.out_cov = ConvBN(8, 2, [3, 3])
+        self.tanh = nn.Sigmoid()
         self.quantization = quantization
 
     def forward(self, x):
@@ -234,8 +210,6 @@ class Decoder(nn.Module):
         out = self.fc(out)
         out = out.view(-1, 2, 16, 32)
         out = self.decoder1(out)
-        out = self.AnciBlock(out)
-        out = self.AnciBlock(out)
         out = self.AnciBlock(out)
         out = self.out_cov(out)
         out = self.tanh(out)

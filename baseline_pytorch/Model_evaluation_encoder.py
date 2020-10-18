@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
 import h5py
-from Model_define_pytorch import AutoEncoder, DatasetFolder
+from Model_define_pytorch_DNN import AutoEncoder, DatasetFolder
 import torch
 import os
 

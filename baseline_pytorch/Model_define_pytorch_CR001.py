@@ -19,7 +19,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from collections import OrderedDict
-
+def swish(x):
+    return x * torch.sigmoid(x)
 
 # This part implement the quantization and dequantization operations.
 # The output of the encoder must be the bitstream.
@@ -132,18 +133,18 @@ class CRBlock(nn.Module):
     def __init__(self):
         super(CRBlock, self).__init__()
         self.path1 = nn.Sequential(OrderedDict([
-            ('conv3x3', ConvBN(32, 32, 3)),
+            ('conv3x3', ConvBN(64, 64, 3)),
             ('relu1', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv1x9', ConvBN(32, 32, [1, 9])),
+            ('conv1x9', ConvBN(64, 64, [1, 9])),
             ('relu2', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv9x1', ConvBN(32, 32, [9, 1])),
+            ('conv9x1', ConvBN(64, 64, [9, 1])),
         ]))
         self.path2 = nn.Sequential(OrderedDict([
-            ('conv1x5', ConvBN(32, 32, [1, 5])),
+            ('conv1x5', ConvBN(64, 64, [1, 5])),
             ('relu', nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ('conv5x1', ConvBN(32, 32, [5, 1])),
+            ('conv5x1', ConvBN(64, 64, [5, 1])),
         ]))
-        self.conv1x1 = ConvBN(32 * 2, 32, 1)
+        self.conv1x1 = ConvBN(64 * 2, 64, 1)
         self.identity = nn.Identity()
         self.relu = nn.LeakyReLU(negative_slope=0.3, inplace=True)
 
@@ -156,7 +157,7 @@ class CRBlock(nn.Module):
         out = self.relu(out)
         out = self.conv1x1(out)
 
-        out = self.relu(out + identity)
+        out = out + identity
         return out
 
 
@@ -166,30 +167,43 @@ class Encoder(nn.Module):
     def __init__(self, feedback_bits, quantization=True):
         super(Encoder, self).__init__()
         self.encoder1 = nn.Sequential(OrderedDict([
-            ("conv3x3_bn", ConvBN(2, 32, 3)),
+            ("conv3x3_bn", ConvBN(2, 64, 3)),
             ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x9_bn", ConvBN(32, 32, [1, 9])),
+            ("conv1x9_bn", ConvBN(64, 64, [5, 5])),
             ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv9x1_bn", ConvBN(32, 32, [9, 1])),
+            ("conv9x1_bn", ConvBN(64, 64, [3, 3])),
         ]))
-        self.encoder2 = ConvBN(2, 32, 3)
+        self.encoder2 = ConvBN(2, 64, 3)
         self.encoder_conv = nn.Sequential(OrderedDict([
             ("relu1", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
-            ("conv1x1_bn", ConvBN(32 * 2, 2, 1)),
+            ("conv1x1_bn", ConvBN(64 * 2, 2, 1)),
             ("relu2", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
         ]))
 
-        self.fc = nn.Linear(1024, int(feedback_bits / self.B))
+        self.fc = nn.Linear(256, int(feedback_bits / self.B))
+        self.LSTM = nn.GRU(1024, 1024, 3, batch_first=True)
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 256)
         self.sig = nn.Sigmoid()
         self.quantize = QuantizationLayer(self.B)
         self.quantization = quantization
+
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.xavier_uniform_(m.weight)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         encode1 = self.encoder1(x)
         encode2 = self.encoder2(x)
         out = torch.cat((encode1, encode2), dim=1)
         out = self.encoder_conv(out)
-        out = out.view(-1, 1024)
+        out = out.view(-1, 1, 1024)
+        out, _ = self.LSTM(out)
+        out = self.fc1(out)
+        out = self.fc2(out)
         out = self.fc(out)
         out = self.sig(out)
         if self.quantization:
@@ -206,17 +220,27 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.feedback_bits = feedback_bits
         self.dequantize = DequantizationLayer(self.B)
-        self.fc = nn.Linear(int(feedback_bits / self.B), 1024)
+        self.fc = nn.Linear(int(feedback_bits / self.B), 256)
+        self.fc2 = nn.Linear(256, 512)
+        self.fc3 = nn.Linear(512, 1024)
         decoder = OrderedDict([
-            ("conv5x5_bn", ConvBN(2, 32, 5)),
+            ("conv5x5_bn", ConvBN(2, 64, 5)),
             ("relu", nn.LeakyReLU(negative_slope=0.3, inplace=True)),
             ("CRBlock1", CRBlock()),
             ("CRBlock2", CRBlock()),
         ])
+        self.LSTM = nn.GRU(1024, 1024, 3, batch_first=True)
         self.decoder_feature = nn.Sequential(decoder)
-        self.out_cov = conv3x3(32, 2)
+        self.out_cov = conv3x3(64, 2)
         self.sig = nn.Sigmoid()
         self.quantization = quantization
+
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.xavier_uniform_(m.weight)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         if self.quantization:
@@ -225,12 +249,16 @@ class Decoder(nn.Module):
             out = x
         out = out.view(-1, int(self.feedback_bits / self.B))
         out = self.fc(out)
+        out = self.fc2(out)
+        out = self.fc3(out)
         out = out.view(-1, 2, 16, 32)
         out = self.decoder_feature(out)
         out = self.out_cov(out)
         out = self.sig(out)
+        out = out.view(-1, 1,1024)
+        out, _ = self.LSTM(out)
+        out = out.view(-1, 2, 16, 32)
         return out
-
 
 # Note: Do not modify following class and keep it in your submission.
 # feedback_bits is 128 by default.

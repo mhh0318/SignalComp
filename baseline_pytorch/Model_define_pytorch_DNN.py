@@ -14,8 +14,6 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from collections import OrderedDict
-
-
 # This part implement the quantization and dequantization operations.
 # The output of the encoder must be the bitstream.
 def Num2Bit(Num, B):
@@ -104,14 +102,6 @@ class DequantizationLayer(nn.Module):
         return out
 
 
-def conv3x3(in_planes, out_planes, stride=1):
-    """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=1, bias=True)
-
-
-
-
 # create your own Encoder
 class Encoder(nn.Module):
     B = 4
@@ -120,6 +110,7 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.fc1 = nn.Linear(1024, 512)
         self.fc2 = nn.Linear(512, 256)
+        #self.fc3 = nn.Linear(256, int(feedback_bits))
         self.fc3 = nn.Linear(256, int(feedback_bits/ self.B))
         self.tanh = nn.Tanh()
         self.sig = nn.Sigmoid()
@@ -144,9 +135,9 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.dequantize = DequantizationLayer(self.B)
         self.fc1 = nn.Linear(512, 1024)
-        self.fc4 = nn.Linear(512, 512)
         self.fc2 = nn.Linear(256, 512)
         self.fc3 = nn.Linear(int(feedback_bits/ self.B), 256)
+        # self.fc3 = nn.Linear(int(feedback_bits), 256)
         self.tanh = nn.Tanh()
         self.sig = nn.Sigmoid()
 
